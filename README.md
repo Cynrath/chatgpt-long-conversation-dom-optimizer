@@ -1,6 +1,6 @@
 # ChatGPT Long Conversation DOM Optimizer
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tampermonkey](https://img.shields.io/badge/userscript-Tampermonkey-black.svg)](https://www.tampermonkey.net/)
 
@@ -49,7 +49,7 @@ Settings are stored locally in the browser using `localStorage`.
 
 The script intentionally avoids matching translated text. It identifies the open reasoning disclosure from its DOM structure and open-state content container, while excluding tool-message containers.
 
-Manual interaction takes precedence over automation. If you explicitly open a reasoning block, the script records an override for that specific conversation turn and reasoning position. That block stays open, while reasoning blocks in later turns continue to auto-collapse normally. Closing the same block manually removes its override.
+Manual interaction takes precedence over automation. As soon as you click a reasoning disclosure, that specific block is temporarily protected from the auto-collapse loop while ChatGPT applies the UI state change. Once the DOM settles, an override is stored for that conversation turn and reasoning position if the block is open. That block stays open, while reasoning blocks in later turns continue to auto-collapse normally. Closing the same block manually removes its override.
 
 These overrides are stored in `sessionStorage`, so they survive navigation between chats in the same tab but are not kept indefinitely across browser sessions.
 

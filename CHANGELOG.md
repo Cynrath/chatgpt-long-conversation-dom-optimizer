@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.2] - 2026-09-22
+
+### Fixed
+
+- Fixed a race where the periodic auto-collapse check could run immediately after a manual click and close the reasoning block before the manual-open override was recorded.
+- User-clicked reasoning blocks are now protected immediately during the ChatGPT disclosure state transition, then promoted to a persistent per-block session override after the DOM settles.
+
 ## [0.4.1] - 2026-09-22
 
 ### Changed

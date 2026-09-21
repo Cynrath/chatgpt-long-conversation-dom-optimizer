@@ -2,7 +2,7 @@
 // @name         ChatGPT Long Conversation DOM Optimizer
 // @name:tr      ChatGPT Uzun Sohbet DOM Optimize Edici
 // @namespace    https://github.com/Cynrath
-// @version      0.4.1
+// @version      0.4.2
 // @description  Optimizes long ChatGPT conversations and automatically collapses open reasoning blocks without relying on UI language.
 // @description:tr Uzun ChatGPT sohbetlerini optimize eder ve açık reasoning/analiz bloklarını arayüz diline bağlı olmadan otomatik kapatır.
 // @author       Cynrath
@@ -113,6 +113,7 @@
     const state = {
         config: loadConfig(),
         manualReasoning: loadManualReasoning(),
+        pendingReasoning: new Set(),
         routeKey: currentRouteKey(),
         root: null,
         scroller: null,
@@ -142,6 +143,7 @@
             state.routeKey = routeKey;
             state.paused = false;
             state.revealedExtra = 0;
+            state.pendingReasoning.clear();
             resetObserver();
             clearOurMarks();
             scheduleInit(150);
@@ -283,41 +285,27 @@
 
         if (!key) return;
 
-        const next = summary.nextElementSibling;
-        const wasOpen =
-            next instanceof HTMLElement &&
-            isOpenAnalysisContent(next);
-
-        const wasClosedReasoning =
-            next instanceof HTMLElement &&
-            next.getAttribute('data-message-author-role') === 'assistant';
-
-        if (wasOpen) {
-            setManualReasoning(key, false);
-            return;
-        }
-
-        if (!wasClosedReasoning) return;
-
-        setManualReasoning(key, true);
+        state.pendingReasoning.add(key);
 
         window.setTimeout(() => {
-            if (state.destroyed || !wrapper.isConnected) return;
+            try {
+                if (state.destroyed || !wrapper.isConnected) return;
 
-            const summaries = Array.from(wrapper.querySelectorAll('span.block'));
-            const current = summaries.find(
-                (candidate) => getManualReasoningKey(wrapper, candidate) === key
-            );
+                const summaries = Array.from(wrapper.querySelectorAll('span.block'));
+                const current = summaries.find(
+                    (candidate) => getManualReasoningKey(wrapper, candidate) === key
+                );
 
-            const content = current?.nextElementSibling;
-            const opened =
-                content instanceof HTMLElement &&
-                isOpenAnalysisContent(content);
+                const content = current?.nextElementSibling;
+                const opened =
+                    content instanceof HTMLElement &&
+                    isOpenAnalysisContent(content);
 
-            if (!opened) {
-                setManualReasoning(key, false);
+                setManualReasoning(key, opened);
+            } finally {
+                state.pendingReasoning.delete(key);
             }
-        }, 400);
+        }, 250);
     }
 
     function clampInt(value, min, max, fallback) {
@@ -638,7 +626,12 @@
                 if (summary.closest('[class*="group/tool-message"]')) continue;
 
                 const manualKey = getManualReasoningKey(wrapper, summary);
-                if (manualKey && state.manualReasoning.has(manualKey)) continue;
+                if (
+                    manualKey &&
+                    (state.pendingReasoning.has(manualKey) || state.manualReasoning.has(manualKey))
+                ) {
+                    continue;
+                }
 
                 const content = summary.nextElementSibling;
                 if (!(content instanceof HTMLElement)) continue;
@@ -998,6 +991,7 @@
         window.clearTimeout(state.initTimer);
         window.clearTimeout(state.settingsTimer);
 
+        state.pendingReasoning.clear();
         resetObserver();
         clearOurMarks();
         document.removeEventListener('click', handleReasoningUserClick, true);
