@@ -1,0 +1,27 @@
+name: Validate userscript
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check JavaScript syntax
+        run: node --check chatgpt-long-conversation-dom-optimizer.user.js
+      - name: Validate required metadata
+        shell: bash
+        run: |
+          grep -q '^// @version' chatgpt-long-conversation-dom-optimizer.user.js
+          grep -q '^// @updateURL    https://raw.githubusercontent.com/Cynrath/chatgpt-long-conversation-dom-optimizer/main/chatgpt-long-conversation-dom-optimizer.user.js$' chatgpt-long-conversation-dom-optimizer.user.js
+          grep -q '^// @downloadURL  https://raw.githubusercontent.com/Cynrath/chatgpt-long-conversation-dom-optimizer/main/chatgpt-long-conversation-dom-optimizer.user.js$' chatgpt-long-conversation-dom-optimizer.user.js

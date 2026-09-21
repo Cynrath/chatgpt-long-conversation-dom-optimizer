@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible problem with the userscript.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a bug. Redact any private conversation content before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Userscript version
+      placeholder: 0.4.0
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 153
+    validations:
+      required: true
+  - type: input
+    id: manager
+    attributes:
+      label: Userscript manager and version
+      placeholder: Tampermonkey 5.x
+    validations:
+      required: true
+  - type: input
+    id: language
+    attributes:
+      label: ChatGPT interface language
+      placeholder: Turkish / English / German / ...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Explain exactly how to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: dom
+    attributes:
+      label: Relevant DOM snippet
+      description: Optional. Redact conversation content and personal information.
+      render: html
