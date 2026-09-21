@@ -1,6 +1,6 @@
 # ChatGPT Long Conversation DOM Optimizer
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tampermonkey](https://img.shields.io/badge/userscript-Tampermonkey-black.svg)](https://www.tampermonkey.net/)
 
@@ -13,7 +13,8 @@ A lightweight userscript that keeps very long ChatGPT conversations responsive w
 - Keeps only the most recent conversation turns visible while preserving the existing DOM.
 - Restores older turns on demand.
 - Uses `content-visibility: auto` for off-screen rendered turns.
-- Automatically collapses open reasoning/analysis blocks.
+- Automatically collapses new/open reasoning/analysis blocks.
+- A reasoning block you open manually is exempt from auto-collapse while that tab session remains active; later reasoning blocks are still handled independently.
 - Reasoning detection does **not** depend on labels such as `Analiz edildi`, `Reasoned`, or another UI language.
 - Avoids watching streamed token changes with a heavy subtree observer.
 - Preserves scroll position when old turns are hidden or restored.
@@ -40,13 +41,17 @@ If you already installed the script manually, installing the repository version 
 | Auto threshold | `80` | Automatic turn optimization starts at this conversation size |
 | Automatic | On | Automatically applies long-conversation optimization |
 | CV | On | Enables native `content-visibility` optimization |
-| Reasoning | On | Automatically collapses open reasoning/analysis blocks |
+| Reasoning | On | Automatically collapses new reasoning/analysis blocks while respecting manual per-block opens |
 
 Settings are stored locally in the browser using `localStorage`.
 
 ## How reasoning collapse works
 
 The script intentionally avoids matching translated text. It identifies the open reasoning disclosure from its DOM structure and open-state content container, while excluding tool-message containers.
+
+Manual interaction takes precedence over automation. If you explicitly open a reasoning block, the script records an override for that specific conversation turn and reasoning position. That block stays open, while reasoning blocks in later turns continue to auto-collapse normally. Closing the same block manually removes its override.
+
+These overrides are stored in `sessionStorage`, so they survive navigation between chats in the same tab but are not kept indefinitely across browser sessions.
 
 This makes the feature usable across ChatGPT interface languages without maintaining a list of translated labels.
 
