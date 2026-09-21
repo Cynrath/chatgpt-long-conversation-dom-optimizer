@@ -2,7 +2,7 @@
 // @name         ChatGPT Long Conversation DOM Optimizer
 // @name:tr      ChatGPT Uzun Sohbet DOM Optimize Edici
 // @namespace    https://github.com/Cynrath
-// @version      0.4.2
+// @version      0.5.0
 // @description  Optimizes long ChatGPT conversations and automatically collapses open reasoning blocks without relying on UI language.
 // @description:tr Uzun ChatGPT sohbetlerini optimize eder ve açık reasoning/analiz bloklarını arayüz diline bağlı olmadan otomatik kapatır.
 // @author       Cynrath
@@ -22,7 +22,7 @@
 
     const APP = 'cgpt-lco';
     const STORAGE_KEY = `${APP}:config:v2`;
-    const MANUAL_REASONING_KEY = `${APP}:manual-reasoning:v1`;
+    const HANDLED_REASONING_KEY = `${APP}:handled-reasoning:v1`;
     const HIDDEN_ATTR = `data-${APP}-hidden`;
     const CV_ATTR = `data-${APP}-cv`;
 
@@ -67,7 +67,8 @@
             threshold: 'Auto threshold',
             automatic: 'Automatic',
             reasoning: 'Reasoning',
-            reasoningTitle: 'Auto-collapse new reasoning blocks; reasoning blocks you open manually stay open',
+            reasoningTitle: 'Auto-collapse each reasoning block only once; if you open it later, it stays open',
+            forceOptimizeTitle: 'Optimize DOM and close every currently open reasoning block once',
             cvTitle: 'Use native content-visibility for off-screen rendered turns',
             collapsePanel: 'Collapse panel',
             expandPanel: 'Expand panel',
@@ -95,7 +96,8 @@
             threshold: 'Otomatik eşik',
             automatic: 'Otomatik',
             reasoning: 'Reasoning',
-            reasoningTitle: 'Yeni reasoning/analiz bloklarını otomatik kapatır; elle açtıkların açık kalır',
+            reasoningTitle: 'Her reasoning/analiz bloğunu yalnızca ilk gördüğünde otomatik kapatır; sonradan açarsan açık kalır',
+            forceOptimizeTitle: 'DOM’u optimize et ve şu anda açık olan tüm reasoning bloklarını bir kerelik kapat',
             cvTitle: 'Ekran dışındaki gerçek turnlerde native content-visibility kullanır',
             collapsePanel: 'Paneli daralt',
             expandPanel: 'Paneli aç',
@@ -112,8 +114,7 @@
 
     const state = {
         config: loadConfig(),
-        manualReasoning: loadManualReasoning(),
-        pendingReasoning: new Set(),
+        handledReasoning: loadHandledReasoning(),
         routeKey: currentRouteKey(),
         root: null,
         scroller: null,
@@ -131,7 +132,6 @@
 
     injectDocumentStyles();
     createPanel();
-    document.addEventListener('click', handleReasoningUserClick, true);
     scheduleInit(0);
 
     const routeTimer = window.setInterval(() => {
@@ -143,7 +143,6 @@
             state.routeKey = routeKey;
             state.paused = false;
             state.revealedExtra = 0;
-            state.pendingReasoning.clear();
             resetObserver();
             clearOurMarks();
             scheduleInit(150);
@@ -161,11 +160,11 @@
 
     window.ChatGPTDOMOptimizer = Object.freeze({
         stats: () => collectStats(),
-        optimize: () => optimizeNow(true),
+        optimize: () => runFullOptimize(),
         revealOlder: (count = state.config.revealStep) =>
             revealOlder(Number(count) || state.config.revealStep),
         restore: () => restoreAll(true),
-        collapseAnalyses: () => collapseOpenAnalyses(true),
+        collapseAnalyses: () => collapseOpenAnalyses(true, true),
         pause: () => {
             state.paused = true;
             restoreAll(false);
@@ -209,9 +208,9 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
     }
 
-    function loadManualReasoning() {
+    function loadHandledReasoning() {
         try {
-            const raw = sessionStorage.getItem(MANUAL_REASONING_KEY);
+            const raw = sessionStorage.getItem(HANDLED_REASONING_KEY);
             if (!raw) return new Set();
 
             const parsed = JSON.parse(raw);
@@ -220,22 +219,22 @@
             return new Set(
                 parsed
                     .filter((value) => typeof value === 'string')
-                    .slice(-500)
+                    .slice(-1000)
             );
         } catch {
             return new Set();
         }
     }
 
-    function saveManualReasoning() {
+    function saveHandledReasoning() {
         try {
-            const values = Array.from(state.manualReasoning).slice(-500);
-            sessionStorage.setItem(MANUAL_REASONING_KEY, JSON.stringify(values));
+            const values = Array.from(state.handledReasoning).slice(-1000);
+            sessionStorage.setItem(HANDLED_REASONING_KEY, JSON.stringify(values));
         } catch {
         }
     }
 
-    function getManualReasoningKey(wrapper, summary) {
+    function getReasoningKey(wrapper, summary) {
         const turnId =
             wrapper.getAttribute('data-turn-id-container') ||
             wrapper.getAttribute('data-turn-id');
@@ -250,62 +249,17 @@
         return `${location.pathname}:${turnId}:${index}`;
     }
 
-    function setManualReasoning(key, opened) {
-        if (!key) return;
+    function markReasoningHandled(key) {
+        if (!key || state.handledReasoning.has(key)) return;
 
-        if (opened) {
-            state.manualReasoning.delete(key);
-            state.manualReasoning.add(key);
-        } else {
-            state.manualReasoning.delete(key);
+        state.handledReasoning.add(key);
+
+        if (state.handledReasoning.size > 1000) {
+            const oldest = state.handledReasoning.values().next().value;
+            if (oldest) state.handledReasoning.delete(oldest);
         }
 
-        saveManualReasoning();
-    }
-
-    function handleReasoningUserClick(event) {
-        if (state.destroyed || !event.isTrusted) return;
-
-        const target = event.target instanceof Element ? event.target : null;
-        const button = target?.closest('button');
-
-        if (!(button instanceof HTMLButtonElement)) return;
-
-        const summary = button.closest('span.block');
-
-        if (!(summary instanceof HTMLElement)) return;
-        if (summary.querySelector('button') !== button) return;
-        if (summary.closest('[class*="group/tool-message"]')) return;
-
-        const wrapper = summary.closest(SELECTORS.wrapper);
-
-        if (!(wrapper instanceof HTMLElement)) return;
-
-        const key = getManualReasoningKey(wrapper, summary);
-
-        if (!key) return;
-
-        state.pendingReasoning.add(key);
-
-        window.setTimeout(() => {
-            try {
-                if (state.destroyed || !wrapper.isConnected) return;
-
-                const summaries = Array.from(wrapper.querySelectorAll('span.block'));
-                const current = summaries.find(
-                    (candidate) => getManualReasoningKey(wrapper, candidate) === key
-                );
-
-                const content = current?.nextElementSibling;
-                const opened =
-                    content instanceof HTMLElement &&
-                    isOpenAnalysisContent(content);
-
-                setManualReasoning(key, opened);
-            } finally {
-                state.pendingReasoning.delete(key);
-            }
-        }, 250);
+        saveHandledReasoning();
     }
 
     function clampInt(value, min, max, fallback) {
@@ -434,6 +388,19 @@
         state.applyTimer = window.setTimeout(() => {
             if (!state.destroyed) applyOptimization(false);
         }, delay);
+    }
+
+    function runFullOptimize() {
+        state.paused = false;
+        state.revealedExtra = 0;
+
+        if (!state.root?.isConnected) {
+            scheduleInit(0);
+            return;
+        }
+
+        collapseOpenAnalyses(true, true);
+        optimizeNow(true);
     }
 
     function optimizeNow(scrollToBottomIfNeeded = false) {
@@ -603,10 +570,10 @@
         }
     }
 
-    function collapseOpenAnalyses(scanAll = false) {
+    function collapseOpenAnalyses(scanAll = false, force = false) {
         if (
             state.destroyed ||
-            !state.config.autoCollapseAnalysis ||
+            (!force && !state.config.autoCollapseAnalysis) ||
             !state.root?.isConnected
         ) {
             return 0;
@@ -617,6 +584,7 @@
 
         const targets = scanAll ? wrappers : wrappers.slice(-12);
         let collapsed = 0;
+        let handledChanged = false;
 
         for (const wrapper of targets) {
             const summaries = wrapper.querySelectorAll('span.block');
@@ -625,27 +593,54 @@
                 if (!(summary instanceof HTMLElement)) continue;
                 if (summary.closest('[class*="group/tool-message"]')) continue;
 
-                const manualKey = getManualReasoningKey(wrapper, summary);
-                if (
-                    manualKey &&
-                    (state.pendingReasoning.has(manualKey) || state.manualReasoning.has(manualKey))
-                ) {
-                    continue;
+                const disclosure = getAnalysisDisclosure(summary);
+                if (!disclosure) continue;
+
+                const key = getReasoningKey(wrapper, summary);
+                if (!key) continue;
+
+                if (!force && state.handledReasoning.has(key)) continue;
+
+                if (!state.handledReasoning.has(key)) {
+                    state.handledReasoning.add(key);
+                    handledChanged = true;
                 }
 
-                const content = summary.nextElementSibling;
-                if (!(content instanceof HTMLElement)) continue;
-                if (!isOpenAnalysisContent(content)) continue;
+                if (!disclosure.open) continue;
 
-                const button = summary.querySelector('button');
-                if (!(button instanceof HTMLButtonElement) || button.disabled) continue;
-
-                button.click();
+                disclosure.button.click();
                 collapsed += 1;
             }
         }
 
+        if (handledChanged) {
+            while (state.handledReasoning.size > 1000) {
+                const oldest = state.handledReasoning.values().next().value;
+                if (!oldest) break;
+                state.handledReasoning.delete(oldest);
+            }
+            saveHandledReasoning();
+        }
+
         return collapsed;
+    }
+
+    function getAnalysisDisclosure(summary) {
+        const button = summary.querySelector('button');
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
+
+        const content = summary.nextElementSibling;
+        if (!(content instanceof HTMLElement)) return null;
+
+        if (isOpenAnalysisContent(content)) {
+            return { button, open: true };
+        }
+
+        if (content.getAttribute('data-message-author-role') === 'assistant') {
+            return { button, open: false };
+        }
+
+        return null;
     }
 
     function isOpenAnalysisContent(element) {
@@ -754,6 +749,7 @@
                     font-weight: 650;
                     border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
                 }
+                .head-actions { display: flex; align-items: center; gap: 5px; }
                 .body { padding: 9px 10px 10px; }
                 .stats { opacity: .88; margin-bottom: 6px; }
                 .status {
@@ -804,7 +800,10 @@
             <div class="box">
                 <div class="head">
                     <span class="title">ChatGPT DOM</span>
-                    <button class="mini collapse" type="button" title="${t.collapsePanel}">–</button>
+                    <div class="head-actions">
+                        <button class="mini quick-optimize" type="button" title="${t.forceOptimizeTitle}">${t.optimize}</button>
+                        <button class="mini collapse" type="button" title="${t.collapsePanel}">–</button>
+                    </div>
                 </div>
                 <div class="body">
                     <div class="stats">${t.domWaiting}</div>
@@ -851,6 +850,7 @@
             stats: shadow.querySelector('.stats'),
             status: shadow.querySelector('.status'),
             optimize: shadow.querySelector('.optimize'),
+            quickOptimize: shadow.querySelector('.quick-optimize'),
             older: shadow.querySelector('.older'),
             restore: shadow.querySelector('.restore'),
             keep: shadow.querySelector('.keep'),
@@ -864,7 +864,8 @@
 
         syncPanelInputs();
 
-        state.panel.optimize.addEventListener('click', () => optimizeNow(true));
+        state.panel.optimize.addEventListener('click', runFullOptimize);
+        state.panel.quickOptimize.addEventListener('click', runFullOptimize);
         state.panel.older.addEventListener('click', () => revealOlder(state.config.revealStep));
         state.panel.restore.addEventListener('click', () => restoreAll(true));
 
@@ -935,7 +936,7 @@
         state.panel.analysis.addEventListener('change', () => {
             state.config.autoCollapseAnalysis = state.panel.analysis.checked;
             saveConfig();
-            if (state.config.autoCollapseAnalysis) collapseOpenAnalyses(true);
+            if (state.config.autoCollapseAnalysis) collapseOpenAnalyses(true, false);
             updatePanel();
         });
 
@@ -991,10 +992,8 @@
         window.clearTimeout(state.initTimer);
         window.clearTimeout(state.settingsTimer);
 
-        state.pendingReasoning.clear();
         resetObserver();
         clearOurMarks();
-        document.removeEventListener('click', handleReasoningUserClick, true);
         document.getElementById(`${APP}-style`)?.remove();
         state.panelHost?.remove();
         state.panelHost = null;

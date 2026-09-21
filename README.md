@@ -1,6 +1,6 @@
 # ChatGPT Long Conversation DOM Optimizer
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tampermonkey](https://img.shields.io/badge/userscript-Tampermonkey-black.svg)](https://www.tampermonkey.net/)
 
@@ -13,8 +13,9 @@ A lightweight userscript that keeps very long ChatGPT conversations responsive w
 - Keeps only the most recent conversation turns visible while preserving the existing DOM.
 - Restores older turns on demand.
 - Uses `content-visibility: auto` for off-screen rendered turns.
-- Automatically collapses new/open reasoning/analysis blocks.
-- A reasoning block you open manually is exempt from auto-collapse while that tab session remains active; later reasoning blocks are still handled independently.
+- Automatically normalizes each reasoning/analysis block only once. If a block is open the first time the script sees it, it is collapsed; if it is already closed, it is simply marked as handled.
+- After a reasoning block has been handled once, opening it manually does not trigger another automatic close. Later reasoning blocks are handled independently.
+- The panel header includes an always-visible **Optimize** shortcut. Manual Optimize performs a one-shot force cleanup: it optimizes the DOM and closes every reasoning block that is currently open, even if that block was already handled.
 - Reasoning detection does **not** depend on labels such as `Analiz edildi`, `Reasoned`, or another UI language.
 - Avoids watching streamed token changes with a heavy subtree observer.
 - Preserves scroll position when old turns are hidden or restored.
@@ -41,21 +42,26 @@ If you already installed the script manually, installing the repository version 
 | Auto threshold | `80` | Automatic turn optimization starts at this conversation size |
 | Automatic | On | Automatically applies long-conversation optimization |
 | CV | On | Enables native `content-visibility` optimization |
-| Reasoning | On | Automatically collapses new reasoning/analysis blocks while respecting manual per-block opens |
+| Reasoning | On | Processes each reasoning/analysis block once, then leaves later manual opens alone |
 
 Settings are stored locally in the browser using `localStorage`.
 
 ## How reasoning collapse works
 
-The script intentionally avoids matching translated text. It identifies the open reasoning disclosure from its DOM structure and open-state content container, while excluding tool-message containers.
+Automatic reasoning cleanup is **one-shot per block**, not a permanent enforcement loop.
 
-Manual interaction takes precedence over automation. As soon as you click a reasoning disclosure, that specific block is temporarily protected from the auto-collapse loop while ChatGPT applies the UI state change. Once the DOM settles, an override is stored for that conversation turn and reasoning position if the block is open. That block stays open, while reasoning blocks in later turns continue to auto-collapse normally. Closing the same block manually removes its override.
+Each reasoning disclosure gets a stable session key derived from the current conversation path, turn ID, and disclosure position. The first time the script recognizes that block:
 
-These overrides are stored in `sessionStorage`, so they survive navigation between chats in the same tab but are not kept indefinitely across browser sessions.
+- if it is open, the script collapses it once and marks it as handled;
+- if it is already closed, the script only marks it as handled.
 
-This makes the feature usable across ChatGPT interface languages without maintaining a list of translated labels.
+After that, automatic checks skip the block. This means you can open an older reasoning section to read it and the periodic optimizer will not close it again. A reasoning block that appears in a later turn has a different key and gets its own one-time automatic cleanup.
 
-The detection is intentionally conservative: if ChatGPT changes the relevant DOM structure, it should stop matching rather than click unrelated controls.
+Handled keys are stored in `sessionStorage`, so navigation between chats in the same tab is remembered without creating permanent browser storage.
+
+The **Optimize** button is intentionally different: it is an explicit one-shot override. Pressing it closes all reasoning blocks that are currently open, including blocks you previously reopened manually, and also runs the normal DOM optimization. After that click, normal one-shot behavior resumes.
+
+Reasoning detection does not match translated labels such as `Analiz edildi` or `Reasoned`. It uses structural DOM checks and excludes tool-message containers. If ChatGPT changes the relevant DOM structure, the detector is designed to fail closed instead of clicking unrelated controls.
 
 ## Console API
 
@@ -63,7 +69,7 @@ The script exposes a small API for debugging and manual control:
 
 ```js
 ChatGPTDOMOptimizer.stats();
-ChatGPTDOMOptimizer.optimize();
+ChatGPTDOMOptimizer.optimize(); // force DOM optimization + close all currently open reasoning blocks
 ChatGPTDOMOptimizer.revealOlder();
 ChatGPTDOMOptimizer.collapseAnalyses();
 ChatGPTDOMOptimizer.restore();

@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.0] - 2026-09-22
+
+### Changed
+
+- Replaced continuous/manual-click reasoning overrides with a simpler one-shot-per-block model.
+- Each reasoning disclosure is marked as handled the first time it is recognized; later manual opens are left alone.
+- Closed reasoning blocks are also marked as handled, preventing a later manual open from being immediately auto-collapsed.
+- The explicit Optimize action now force-closes all currently open reasoning blocks, regardless of whether they were handled before.
+
+### Added
+
+- Added an always-visible **Optimize** shortcut in the panel header, immediately to the left of the expand/collapse button.
+
+### Removed
+
+- Removed the trusted-click race handling and manual/pending reasoning override system introduced in v0.4.x.
+
 ## [0.4.2] - 2026-09-22
 
 ### Fixed
