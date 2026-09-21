@@ -2,7 +2,7 @@
 // @name         ChatGPT Long Conversation DOM Optimizer
 // @name:tr      ChatGPT Uzun Sohbet DOM Optimize Edici
 // @namespace    https://github.com/Cynrath
-// @version      0.4.0
+// @version      0.4.1
 // @description  Optimizes long ChatGPT conversations and automatically collapses open reasoning blocks without relying on UI language.
 // @description:tr Uzun ChatGPT sohbetlerini optimize eder ve açık reasoning/analiz bloklarını arayüz diline bağlı olmadan otomatik kapatır.
 // @author       Cynrath
@@ -22,6 +22,7 @@
 
     const APP = 'cgpt-lco';
     const STORAGE_KEY = `${APP}:config:v2`;
+    const MANUAL_REASONING_KEY = `${APP}:manual-reasoning:v1`;
     const HIDDEN_ATTR = `data-${APP}-hidden`;
     const CV_ATTR = `data-${APP}-cv`;
 
@@ -66,7 +67,7 @@
             threshold: 'Auto threshold',
             automatic: 'Automatic',
             reasoning: 'Reasoning',
-            reasoningTitle: 'Automatically collapse open reasoning blocks; detection is language-independent',
+            reasoningTitle: 'Auto-collapse new reasoning blocks; reasoning blocks you open manually stay open',
             cvTitle: 'Use native content-visibility for off-screen rendered turns',
             collapsePanel: 'Collapse panel',
             expandPanel: 'Expand panel',
@@ -94,7 +95,7 @@
             threshold: 'Otomatik eşik',
             automatic: 'Otomatik',
             reasoning: 'Reasoning',
-            reasoningTitle: 'Açık reasoning/analiz bloklarını otomatik kapatır; arayüz diline bağlı değildir',
+            reasoningTitle: 'Yeni reasoning/analiz bloklarını otomatik kapatır; elle açtıkların açık kalır',
             cvTitle: 'Ekran dışındaki gerçek turnlerde native content-visibility kullanır',
             collapsePanel: 'Paneli daralt',
             expandPanel: 'Paneli aç',
@@ -111,6 +112,7 @@
 
     const state = {
         config: loadConfig(),
+        manualReasoning: loadManualReasoning(),
         routeKey: currentRouteKey(),
         root: null,
         scroller: null,
@@ -128,6 +130,7 @@
 
     injectDocumentStyles();
     createPanel();
+    document.addEventListener('click', handleReasoningUserClick, true);
     scheduleInit(0);
 
     const routeTimer = window.setInterval(() => {
@@ -202,6 +205,119 @@
     function saveConfig() {
         state.config = sanitizeConfig(state.config);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
+    }
+
+    function loadManualReasoning() {
+        try {
+            const raw = sessionStorage.getItem(MANUAL_REASONING_KEY);
+            if (!raw) return new Set();
+
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return new Set();
+
+            return new Set(
+                parsed
+                    .filter((value) => typeof value === 'string')
+                    .slice(-500)
+            );
+        } catch {
+            return new Set();
+        }
+    }
+
+    function saveManualReasoning() {
+        try {
+            const values = Array.from(state.manualReasoning).slice(-500);
+            sessionStorage.setItem(MANUAL_REASONING_KEY, JSON.stringify(values));
+        } catch {
+        }
+    }
+
+    function getManualReasoningKey(wrapper, summary) {
+        const turnId =
+            wrapper.getAttribute('data-turn-id-container') ||
+            wrapper.getAttribute('data-turn-id');
+
+        if (!turnId) return null;
+
+        const summaries = Array.from(wrapper.querySelectorAll('span.block'));
+        const index = summaries.indexOf(summary);
+
+        if (index < 0) return null;
+
+        return `${location.pathname}:${turnId}:${index}`;
+    }
+
+    function setManualReasoning(key, opened) {
+        if (!key) return;
+
+        if (opened) {
+            state.manualReasoning.delete(key);
+            state.manualReasoning.add(key);
+        } else {
+            state.manualReasoning.delete(key);
+        }
+
+        saveManualReasoning();
+    }
+
+    function handleReasoningUserClick(event) {
+        if (state.destroyed || !event.isTrusted) return;
+
+        const target = event.target instanceof Element ? event.target : null;
+        const button = target?.closest('button');
+
+        if (!(button instanceof HTMLButtonElement)) return;
+
+        const summary = button.closest('span.block');
+
+        if (!(summary instanceof HTMLElement)) return;
+        if (summary.querySelector('button') !== button) return;
+        if (summary.closest('[class*="group/tool-message"]')) return;
+
+        const wrapper = summary.closest(SELECTORS.wrapper);
+
+        if (!(wrapper instanceof HTMLElement)) return;
+
+        const key = getManualReasoningKey(wrapper, summary);
+
+        if (!key) return;
+
+        const next = summary.nextElementSibling;
+        const wasOpen =
+            next instanceof HTMLElement &&
+            isOpenAnalysisContent(next);
+
+        const wasClosedReasoning =
+            next instanceof HTMLElement &&
+            next.getAttribute('data-message-author-role') === 'assistant';
+
+        if (wasOpen) {
+            setManualReasoning(key, false);
+            return;
+        }
+
+        if (!wasClosedReasoning) return;
+
+        setManualReasoning(key, true);
+
+        window.setTimeout(() => {
+            if (state.destroyed || !wrapper.isConnected) return;
+
+            const summaries = Array.from(wrapper.querySelectorAll('span.block'));
+            const current = summaries.find(
+                (candidate) => getManualReasoningKey(wrapper, candidate) === key
+            );
+
+            const content = current?.nextElementSibling;
+            const opened =
+                content instanceof HTMLElement &&
+                isOpenAnalysisContent(content);
+
+            if (!opened) {
+                setManualReasoning(key, false);
+            }
+        }, 400);
     }
 
     function clampInt(value, min, max, fallback) {
@@ -520,6 +636,9 @@
             for (const summary of summaries) {
                 if (!(summary instanceof HTMLElement)) continue;
                 if (summary.closest('[class*="group/tool-message"]')) continue;
+
+                const manualKey = getManualReasoningKey(wrapper, summary);
+                if (manualKey && state.manualReasoning.has(manualKey)) continue;
 
                 const content = summary.nextElementSibling;
                 if (!(content instanceof HTMLElement)) continue;
@@ -881,6 +1000,7 @@
 
         resetObserver();
         clearOurMarks();
+        document.removeEventListener('click', handleReasoningUserClick, true);
         document.getElementById(`${APP}-style`)?.remove();
         state.panelHost?.remove();
         state.panelHost = null;
