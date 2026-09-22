@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0] - 2026-09-22
+
+### Added
+
+- Added a compact 2.6-second feedback toast for Optimize, DOM-only optimization, reasoning-history reset, and DOM safety events.
+- Added a **DOM only** action that optimizes long-conversation DOM without changing reasoning blocks.
+- Added handled/open reasoning counters to the floating panel and expanded console statistics.
+- Added **Reset reasoning history** for clearing session-scoped handled reasoning keys.
+- Added optional **Alt+Shift+O** full-Optimize keyboard shortcut.
+- Added a conservative runtime DOM self-check with fail-safe pause behavior.
+- Added `optimizeDom()`, `resetReasoning()`, and `selfCheck()` to the console API.
+
+### Changed
+
+- Automatic reasoning cleanup now waits while ChatGPT reports an active streaming state; explicit manual Optimize remains a force action.
+- Panel actions were reorganized so full Optimize and DOM-only optimization are both directly accessible.
+- Old v0.4.x manual-reasoning session storage is cleaned up automatically.
+- Corrected installation documentation for older manually installed copies that used a different userscript namespace.
+
 ## [0.5.0] - 2026-09-22
 
 ### Changed

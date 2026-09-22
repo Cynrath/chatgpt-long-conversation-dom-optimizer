@@ -2,7 +2,7 @@
 // @name         ChatGPT Long Conversation DOM Optimizer
 // @name:tr      ChatGPT Uzun Sohbet DOM Optimize Edici
 // @namespace    https://github.com/Cynrath
-// @version      0.5.0
+// @version      0.6.0
 // @description  Optimizes long ChatGPT conversations and automatically collapses open reasoning blocks without relying on UI language.
 // @description:tr Uzun ChatGPT sohbetlerini optimize eder ve açık reasoning/analiz bloklarını arayüz diline bağlı olmadan otomatik kapatır.
 // @author       Cynrath
@@ -23,6 +23,8 @@
     const APP = 'cgpt-lco';
     const STORAGE_KEY = `${APP}:config:v2`;
     const HANDLED_REASONING_KEY = `${APP}:handled-reasoning:v1`;
+    const LEGACY_SESSION_KEYS = [`${APP}:manual-reasoning:v1`];
+    const FEEDBACK_MS = 2600;
     const HIDDEN_ATTR = `data-${APP}-hidden`;
     const CV_ATTR = `data-${APP}-cv`;
 
@@ -30,6 +32,7 @@
         thread: '#thread',
         wrapper: '[data-turn-id-container]',
         turn: 'section[data-testid^="conversation-turn-"][data-turn]',
+        streaming: '[data-testid="stop-button"], [data-testid="composer-stop-button"], [data-is-streaming="true"], [data-streaming="true"]',
     });
 
     const DEFAULT_CONFIG = Object.freeze({
@@ -39,6 +42,7 @@
         autoOptimize: true,
         contentVisibility: true,
         autoCollapseAnalysis: true,
+        keyboardShortcut: true,
         showPanel: true,
         panelCollapsed: false,
     });
@@ -58,8 +62,10 @@
             restoredPaused: 'Full history restored; optimizer paused',
             domWaiting: 'Waiting for DOM',
             turnsMissing: 'Conversation turns not found',
-            stats: (all, visible, rendered) => `Turns ${all} | visible ${visible} | render ${rendered}`,
+            stats: (all, visible, hidden) => `Turns ${all} | visible ${visible} | hidden ${hidden}`,
+            reasoningStats: (handled, open) => `Reasoning handled ${handled} | open ${open}`,
             optimize: 'Optimize',
+            domOnly: 'DOM only',
             older: (n) => `+${n} older`,
             restore: 'Restore all',
             keepRecent: 'Keep recent turns',
@@ -68,7 +74,17 @@
             automatic: 'Automatic',
             reasoning: 'Reasoning',
             reasoningTitle: 'Auto-collapse each reasoning block only once; if you open it later, it stays open',
-            forceOptimizeTitle: 'Optimize DOM and close every currently open reasoning block once',
+            forceOptimizeTitle: 'Optimize DOM and close every currently open reasoning block once (Alt+Shift+O)',
+            domOnlyTitle: 'Optimize old conversation DOM without changing reasoning blocks',
+            shortcut: 'Shortcut',
+            shortcutTitle: 'Enable Alt+Shift+O for full Optimize',
+            resetReasoning: 'Reset reasoning history',
+            feedbackOptimize: (hidden, collapsed) => `Optimized: ${hidden} old turns hidden · ${collapsed} reasoning closed`,
+            feedbackDomOnly: (hidden) => `DOM optimized: ${hidden} old turns hidden`,
+            feedbackReset: (count) => `Reasoning history reset: ${count} entries cleared`,
+            safetyPaused: 'Safety pause: ChatGPT DOM structure changed',
+            safetyRestored: 'DOM structure check passed; optimizer resumed',
+            noConversation: 'Conversation DOM is not ready yet',
             cvTitle: 'Use native content-visibility for off-screen rendered turns',
             collapsePanel: 'Collapse panel',
             expandPanel: 'Expand panel',
@@ -87,8 +103,10 @@
             restoredPaused: 'Tüm geçmiş geri açıldı; optimizer duraklatıldı',
             domWaiting: 'DOM bekleniyor',
             turnsMissing: 'Sohbet turnleri bulunamadı',
-            stats: (all, visible, rendered) => `Turn ${all} | görünür ${visible} | render ${rendered}`,
+            stats: (all, visible, hidden) => `Turn ${all} | görünür ${visible} | gizli ${hidden}`,
+            reasoningStats: (handled, open) => `Reasoning işlendi ${handled} | açık ${open}`,
             optimize: 'Optimize et',
+            domOnly: 'Sadece DOM',
             older: (n) => `+${n} eski`,
             restore: 'Tümünü geri aç',
             keepRecent: 'Görünür son turn',
@@ -97,7 +115,17 @@
             automatic: 'Otomatik',
             reasoning: 'Reasoning',
             reasoningTitle: 'Her reasoning/analiz bloğunu yalnızca ilk gördüğünde otomatik kapatır; sonradan açarsan açık kalır',
-            forceOptimizeTitle: 'DOM’u optimize et ve şu anda açık olan tüm reasoning bloklarını bir kerelik kapat',
+            forceOptimizeTitle: 'DOM’u optimize et ve şu anda açık olan tüm reasoning bloklarını kapat (Alt+Shift+O)',
+            domOnlyTitle: 'Reasoning bloklarına dokunmadan eski sohbet DOM’unu optimize et',
+            shortcut: 'Kısayol',
+            shortcutTitle: 'Tam Optimize için Alt+Shift+O kısayolunu etkinleştir',
+            resetReasoning: 'Reasoning geçmişini sıfırla',
+            feedbackOptimize: (hidden, collapsed) => `Optimize edildi: ${hidden} eski turn gizlendi · ${collapsed} reasoning kapatıldı`,
+            feedbackDomOnly: (hidden) => `DOM optimize edildi: ${hidden} eski turn gizlendi`,
+            feedbackReset: (count) => `Reasoning geçmişi sıfırlandı: ${count} kayıt temizlendi`,
+            safetyPaused: 'Güvenlik duraklatması: ChatGPT DOM yapısı değişti',
+            safetyRestored: 'DOM yapısı kontrol edildi; optimizer devam ediyor',
+            noConversation: 'Sohbet DOM’u henüz hazır değil',
             cvTitle: 'Ekran dışındaki gerçek turnlerde native content-visibility kullanır',
             collapsePanel: 'Paneli daralt',
             expandPanel: 'Paneli aç',
@@ -111,6 +139,8 @@
     ).toLowerCase().startsWith('tr') ? 'tr' : 'en';
 
     const t = I18N[lang];
+
+    cleanupLegacyStorage();
 
     const state = {
         config: loadConfig(),
@@ -126,12 +156,17 @@
         applyTimer: 0,
         initTimer: 0,
         settingsTimer: 0,
+        feedbackTimer: 0,
+        domMismatchCount: 0,
+        safetyPaused: false,
+        safetyIssue: '',
         lastStatus: t.starting,
         destroyed: false,
     };
 
     injectDocumentStyles();
     createPanel();
+    document.addEventListener('keydown', handleKeyboardShortcut, true);
     scheduleInit(0);
 
     const routeTimer = window.setInterval(() => {
@@ -143,6 +178,9 @@
             state.routeKey = routeKey;
             state.paused = false;
             state.revealedExtra = 0;
+            state.domMismatchCount = 0;
+            state.safetyPaused = false;
+            state.safetyIssue = '';
             resetObserver();
             clearOurMarks();
             scheduleInit(150);
@@ -155,12 +193,16 @@
             return;
         }
 
+        if (!runDomSelfCheck(false)) return;
         collapseOpenAnalyses(false);
     }, 1500);
 
     window.ChatGPTDOMOptimizer = Object.freeze({
         stats: () => collectStats(),
         optimize: () => runFullOptimize(),
+        optimizeDom: () => runDomOnlyOptimize(),
+        resetReasoning: () => resetReasoningHistory(),
+        selfCheck: () => runDomSelfCheck(true),
         revealOlder: (count = state.config.revealStep) =>
             revealOlder(Number(count) || state.config.revealStep),
         restore: () => restoreAll(true),
@@ -198,6 +240,7 @@
             autoOptimize: Boolean(config.autoOptimize),
             contentVisibility: Boolean(config.contentVisibility),
             autoCollapseAnalysis: config.autoCollapseAnalysis !== false,
+            keyboardShortcut: config.keyboardShortcut !== false,
             showPanel: config.showPanel !== false,
             panelCollapsed: Boolean(config.panelCollapsed),
         };
@@ -206,6 +249,15 @@
     function saveConfig() {
         state.config = sanitizeConfig(state.config);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
+    }
+
+    function cleanupLegacyStorage() {
+        for (const key of LEGACY_SESSION_KEYS) {
+            try {
+                sessionStorage.removeItem(key);
+            } catch {
+            }
+        }
     }
 
     function loadHandledReasoning() {
@@ -250,7 +302,7 @@
     }
 
     function markReasoningHandled(key) {
-        if (!key || state.handledReasoning.has(key)) return;
+        if (!key || state.handledReasoning.has(key)) return false;
 
         state.handledReasoning.add(key);
 
@@ -259,7 +311,44 @@
             if (oldest) state.handledReasoning.delete(oldest);
         }
 
-        saveHandledReasoning();
+        return true;
+    }
+
+    function resetReasoningHistory() {
+        const count = state.handledReasoning.size;
+        state.handledReasoning.clear();
+
+        try {
+            sessionStorage.removeItem(HANDLED_REASONING_KEY);
+        } catch {
+        }
+
+        updatePanel();
+        showFeedback(t.feedbackReset(count));
+        return count;
+    }
+
+    function handleKeyboardShortcut(event) {
+        if (
+            state.destroyed ||
+            !state.config.keyboardShortcut ||
+            event.repeat ||
+            event.code !== 'KeyO' ||
+            !event.altKey ||
+            !event.shiftKey ||
+            event.ctrlKey ||
+            event.metaKey
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        runFullOptimize();
+    }
+
+    function isChatGPTStreaming() {
+        return Boolean(document.querySelector(SELECTORS.streaming));
     }
 
     function clampInt(value, min, max, fallback) {
@@ -269,6 +358,65 @@
 
     function currentRouteKey() {
         return `${location.pathname}${location.search}`;
+    }
+
+    function runDomSelfCheck(force = false) {
+        if (state.destroyed) return false;
+
+        const thread = document.querySelector(SELECTORS.thread);
+        if (!thread) {
+            if (force) showFeedback(t.noConversation);
+            return false;
+        }
+
+        if (!state.root?.isConnected) {
+            if (force) showFeedback(t.noConversation);
+            return false;
+        }
+
+        const discoveredWrappers = Array.from(
+            thread.querySelectorAll(SELECTORS.wrapper)
+        ).filter((el) =>
+            el instanceof HTMLElement &&
+            el.dataset.turnIdContainer !== 'client-created-root'
+        );
+
+        const directWrappers = getWrappers();
+        const rootIsInsideThread = thread.contains(state.root);
+        const contractOk =
+            rootIsInsideThread &&
+            (discoveredWrappers.length === 0 || directWrappers.length > 0);
+
+        if (contractOk) {
+            state.domMismatchCount = 0;
+
+            if (state.safetyPaused) {
+                state.safetyPaused = false;
+                state.safetyIssue = '';
+                setStatus(t.safetyRestored);
+                showFeedback(t.safetyRestored);
+                updatePanel();
+            }
+
+            return true;
+        }
+
+        state.domMismatchCount += 1;
+
+        if (force || state.domMismatchCount >= 3) {
+            const firstPause = !state.safetyPaused;
+            state.safetyPaused = true;
+            state.safetyIssue = 'conversation-root';
+            setStatus(t.safetyPaused);
+
+            if (firstPause || force) {
+                showFeedback(t.safetyPaused);
+            }
+
+            updatePanel();
+        }
+
+        return false;
     }
 
     function injectDocumentStyles() {
@@ -310,6 +458,7 @@
         }
 
         applyContentVisibilityFlag();
+        runDomSelfCheck(false);
         collapseOpenAnalyses(true);
         updatePanel();
 
@@ -396,11 +545,39 @@
 
         if (!state.root?.isConnected) {
             scheduleInit(0);
+            showFeedback(t.noConversation);
             return;
         }
 
-        collapseOpenAnalyses(true, true);
+        if (!runDomSelfCheck(true)) return;
+
+        const collapsed = collapseOpenAnalyses(true, true);
         optimizeNow(true);
+
+        window.setTimeout(() => {
+            const stats = collectStats();
+            showFeedback(t.feedbackOptimize(stats.hiddenWrappers, collapsed));
+        }, 180);
+    }
+
+    function runDomOnlyOptimize() {
+        state.paused = false;
+        state.revealedExtra = 0;
+
+        if (!state.root?.isConnected) {
+            scheduleInit(0);
+            showFeedback(t.noConversation);
+            return;
+        }
+
+        if (!runDomSelfCheck(true)) return;
+
+        optimizeNow(true);
+
+        window.setTimeout(() => {
+            const stats = collectStats();
+            showFeedback(t.feedbackDomOnly(stats.hiddenWrappers));
+        }, 180);
     }
 
     function optimizeNow(scrollToBottomIfNeeded = false) {
@@ -426,7 +603,12 @@
     }
 
     function applyOptimization(force = false) {
-        if (state.destroyed || state.paused || !state.root?.isConnected) return;
+        if (
+            state.destroyed ||
+            state.paused ||
+            state.safetyPaused ||
+            !state.root?.isConnected
+        ) return;
 
         const wrappers = getWrappers();
         if (!wrappers.length) {
@@ -573,7 +755,9 @@
     function collapseOpenAnalyses(scanAll = false, force = false) {
         if (
             state.destroyed ||
+            state.safetyPaused ||
             (!force && !state.config.autoCollapseAnalysis) ||
+            (!force && isChatGPTStreaming()) ||
             !state.root?.isConnected
         ) {
             return 0;
@@ -601,8 +785,7 @@
 
                 if (!force && state.handledReasoning.has(key)) continue;
 
-                if (!state.handledReasoning.has(key)) {
-                    state.handledReasoning.add(key);
+                if (markReasoningHandled(key)) {
                     handledChanged = true;
                 }
 
@@ -641,6 +824,35 @@
         }
 
         return null;
+    }
+
+    function countOpenAnalyses() {
+        if (!state.root?.isConnected) return 0;
+
+        let open = 0;
+
+        for (const wrapper of getWrappers()) {
+            for (const summary of wrapper.querySelectorAll('span.block')) {
+                if (!(summary instanceof HTMLElement)) continue;
+                if (summary.closest('[class*="group/tool-message"]')) continue;
+
+                const disclosure = getAnalysisDisclosure(summary);
+                if (disclosure?.open) open += 1;
+            }
+        }
+
+        return open;
+    }
+
+    function handledReasoningForCurrentRoute() {
+        const prefix = `${location.pathname}:`;
+        let count = 0;
+
+        for (const key of state.handledReasoning) {
+            if (key.startsWith(prefix)) count += 1;
+        }
+
+        return count;
     }
 
     function isOpenAnalysisContent(element) {
@@ -702,6 +914,13 @@
             autoOptimize: state.config.autoOptimize,
             contentVisibility: state.config.contentVisibility,
             autoCollapseAnalysis: state.config.autoCollapseAnalysis,
+            keyboardShortcut: state.config.keyboardShortcut,
+            handledReasoning: handledReasoningForCurrentRoute(),
+            handledReasoningTotal: state.handledReasoning.size,
+            openReasoning: countOpenAnalyses(),
+            streaming: isChatGPTStreaming(),
+            safetyPaused: state.safetyPaused,
+            safetyIssue: state.safetyIssue,
             paused: state.paused,
             status: state.lastStatus,
         });
@@ -709,6 +928,22 @@
 
     function setStatus(text) {
         state.lastStatus = text;
+    }
+
+    function showFeedback(text, duration = FEEDBACK_MS) {
+        if (!state.panel?.feedback) return;
+
+        window.clearTimeout(state.feedbackTimer);
+
+        const feedback = state.panel.feedback;
+        feedback.textContent = text;
+        feedback.classList.remove('show');
+        void feedback.offsetWidth;
+        feedback.classList.add('show');
+
+        state.feedbackTimer = window.setTimeout(() => {
+            feedback.classList.remove('show');
+        }, duration);
     }
 
     function createPanel() {
@@ -750,8 +985,29 @@
                     border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
                 }
                 .head-actions { display: flex; align-items: center; gap: 5px; }
+                .feedback {
+                    position: absolute;
+                    right: 0;
+                    bottom: calc(100% + 8px);
+                    width: 286px;
+                    box-sizing: border-box;
+                    padding: 8px 10px;
+                    border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+                    border-radius: 10px;
+                    background: color-mix(in srgb, Canvas 96%, transparent);
+                    color: CanvasText;
+                    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+                    backdrop-filter: blur(12px);
+                    font: 12px/1.35 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+                    opacity: 0;
+                    transform: translateY(5px);
+                    pointer-events: none;
+                    transition: opacity .16s ease, transform .16s ease;
+                }
+                .feedback.show { opacity: 1; transform: translateY(0); }
                 .body { padding: 9px 10px 10px; }
-                .stats { opacity: .88; margin-bottom: 6px; }
+                .stats { opacity: .88; margin-bottom: 3px; }
+                .reasoning-stats { opacity: .72; margin-bottom: 6px; }
                 .status {
                     opacity: .68;
                     margin-bottom: 9px;
@@ -792,11 +1048,13 @@
                     justify-content: space-between;
                     gap: 8px;
                     margin-top: 8px;
+                    flex-wrap: wrap;
                 }
                 .collapsed .body { display: none; }
                 .collapsed { width: auto; min-width: 122px; }
             </style>
 
+            <div class="feedback" role="status" aria-live="polite"></div>
             <div class="box">
                 <div class="head">
                     <span class="title">ChatGPT DOM</span>
@@ -807,14 +1065,16 @@
                 </div>
                 <div class="body">
                     <div class="stats">${t.domWaiting}</div>
+                    <div class="reasoning-stats">${t.reasoningStats(0, 0)}</div>
                     <div class="status">${t.starting}</div>
 
                     <div class="row">
-                        <button class="grow optimize" type="button">${t.optimize}</button>
-                        <button class="older" type="button">${t.older(DEFAULT_CONFIG.revealStep)}</button>
+                        <button class="grow optimize" type="button" title="${t.forceOptimizeTitle}">${t.optimize}</button>
+                        <button class="grow dom-only" type="button" title="${t.domOnlyTitle}">${t.domOnly}</button>
                     </div>
 
                     <div class="row">
+                        <button class="grow older" type="button">${t.older(DEFAULT_CONFIG.revealStep)}</button>
                         <button class="grow restore" type="button">${t.restore}</button>
                     </div>
 
@@ -837,6 +1097,11 @@
                         <label><input class="auto" type="checkbox"> ${t.automatic}</label>
                         <label title="${t.cvTitle}"><input class="cv" type="checkbox"> CV</label>
                         <label title="${t.reasoningTitle}"><input class="analysis" type="checkbox"> ${t.reasoning}</label>
+                        <label title="${t.shortcutTitle}"><input class="shortcut" type="checkbox"> ${t.shortcut}</label>
+                    </div>
+
+                    <div class="row">
+                        <button class="grow reset-reasoning" type="button">${t.resetReasoning}</button>
                     </div>
                 </div>
             </div>
@@ -846,11 +1111,14 @@
         state.panelHost = host;
         state.panel = {
             box: shadow.querySelector('.box'),
+            feedback: shadow.querySelector('.feedback'),
             title: shadow.querySelector('.title'),
             stats: shadow.querySelector('.stats'),
+            reasoningStats: shadow.querySelector('.reasoning-stats'),
             status: shadow.querySelector('.status'),
             optimize: shadow.querySelector('.optimize'),
             quickOptimize: shadow.querySelector('.quick-optimize'),
+            domOnly: shadow.querySelector('.dom-only'),
             older: shadow.querySelector('.older'),
             restore: shadow.querySelector('.restore'),
             keep: shadow.querySelector('.keep'),
@@ -859,6 +1127,8 @@
             auto: shadow.querySelector('.auto'),
             cv: shadow.querySelector('.cv'),
             analysis: shadow.querySelector('.analysis'),
+            shortcut: shadow.querySelector('.shortcut'),
+            resetReasoning: shadow.querySelector('.reset-reasoning'),
             collapse: shadow.querySelector('.collapse'),
         };
 
@@ -866,6 +1136,8 @@
 
         state.panel.optimize.addEventListener('click', runFullOptimize);
         state.panel.quickOptimize.addEventListener('click', runFullOptimize);
+        state.panel.domOnly.addEventListener('click', runDomOnlyOptimize);
+        state.panel.resetReasoning.addEventListener('click', resetReasoningHistory);
         state.panel.older.addEventListener('click', () => revealOlder(state.config.revealStep));
         state.panel.restore.addEventListener('click', () => restoreAll(true));
 
@@ -940,6 +1212,12 @@
             updatePanel();
         });
 
+        state.panel.shortcut.addEventListener('change', () => {
+            state.config.keyboardShortcut = state.panel.shortcut.checked;
+            saveConfig();
+            updatePanel();
+        });
+
         if (state.config.panelCollapsed) {
             state.panel.box.classList.add('collapsed');
             state.panel.collapse.textContent = '+';
@@ -964,6 +1242,7 @@
         state.panel.auto.checked = state.config.autoOptimize;
         state.panel.cv.checked = state.config.contentVisibility;
         state.panel.analysis.checked = state.config.autoCollapseAnalysis;
+        state.panel.shortcut.checked = state.config.keyboardShortcut;
     }
 
     function updatePanel() {
@@ -971,8 +1250,12 @@
 
         const stats = collectStats();
         state.panel.stats.textContent = stats.wrappers
-            ? t.stats(stats.wrappers, stats.visibleWrappers, stats.renderedTurns)
+            ? t.stats(stats.wrappers, stats.visibleWrappers, stats.hiddenWrappers)
             : t.turnsMissing;
+        state.panel.reasoningStats.textContent = t.reasoningStats(
+            stats.handledReasoning,
+            stats.openReasoning
+        );
         state.panel.status.textContent = state.lastStatus;
         state.panel.title.textContent = stats.hiddenWrappers
             ? `ChatGPT DOM ${stats.hiddenWrappers}↓`
@@ -991,9 +1274,11 @@
         window.clearTimeout(state.applyTimer);
         window.clearTimeout(state.initTimer);
         window.clearTimeout(state.settingsTimer);
+        window.clearTimeout(state.feedbackTimer);
 
         resetObserver();
         clearOurMarks();
+        document.removeEventListener('keydown', handleKeyboardShortcut, true);
         document.getElementById(`${APP}-style`)?.remove();
         state.panelHost?.remove();
         state.panelHost = null;
