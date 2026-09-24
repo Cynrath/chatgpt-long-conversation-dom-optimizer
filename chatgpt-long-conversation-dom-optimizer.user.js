@@ -2,7 +2,7 @@
 // @name         ChatGPT Long Conversation DOM Optimizer
 // @name:tr      ChatGPT Uzun Sohbet DOM Optimize Edici
 // @namespace    https://github.com/Cynrath
-// @version      0.6.0
+// @version      0.7.0
 // @description  Optimizes long ChatGPT conversations and automatically collapses open reasoning blocks without relying on UI language.
 // @description:tr Uzun ChatGPT sohbetlerini optimize eder ve açık reasoning/analiz bloklarını arayüz diline bağlı olmadan otomatik kapatır.
 // @author       Cynrath
@@ -28,11 +28,25 @@
     const HIDDEN_ATTR = `data-${APP}-hidden`;
     const CV_ATTR = `data-${APP}-cv`;
 
+    const DOM_MODE = Object.freeze({
+        native: 'native-virtualized',
+        legacy: 'legacy',
+    });
+
     const SELECTORS = Object.freeze({
-        thread: '#thread',
-        wrapper: '[data-turn-id-container]',
-        turn: 'section[data-testid^="conversation-turn-"][data-turn]',
-        streaming: '[data-testid="stop-button"], [data-testid="composer-stop-button"], [data-is-streaming="true"], [data-streaming="true"]',
+        modernConversation: '[data-thread-find-target="conversation"]',
+        modernTurn: '[data-turn-key]',
+        modernScroller: '[data-app-action-timeline-scroll]',
+        legacyThread: '#thread',
+        legacyWrapper: '[data-turn-id-container]',
+        legacyTurn: 'section[data-testid^="conversation-turn-"][data-turn]',
+        streaming: [
+            '[data-thread-find-target="conversation"] [role="status"][aria-busy="true"]',
+            '[data-testid="stop-button"]',
+            '[data-testid="composer-stop-button"]',
+            '[data-is-streaming="true"]',
+            '[data-streaming="true"]',
+        ].join(', '),
     });
 
     const DEFAULT_CONFIG = Object.freeze({
@@ -63,7 +77,9 @@
             domWaiting: 'Waiting for DOM',
             turnsMissing: 'Conversation turns not found',
             stats: (all, visible, hidden) => `Turns ${all} | visible ${visible} | hidden ${hidden}`,
+            nativeStats: (rendered) => `Native virtualization | rendered ${rendered}`,
             reasoningStats: (handled, open) => `Reasoning handled ${handled} | open ${open}`,
+            nativeActive: 'ChatGPT native virtualization active',
             optimize: 'Optimize',
             domOnly: 'DOM only',
             older: (n) => `+${n} older`,
@@ -80,7 +96,9 @@
             shortcutTitle: 'Enable Alt+Shift+O for full Optimize',
             resetReasoning: 'Reset reasoning history',
             feedbackOptimize: (hidden, collapsed) => `Optimized: ${hidden} old turns hidden · ${collapsed} reasoning closed`,
+            feedbackOptimizeNative: (collapsed) => `Native virtualization active · ${collapsed} reasoning closed`,
             feedbackDomOnly: (hidden) => `DOM optimized: ${hidden} old turns hidden`,
+            feedbackNative: 'ChatGPT already manages long-conversation DOM with native virtualization',
             feedbackReset: (count) => `Reasoning history reset: ${count} entries cleared`,
             safetyPaused: 'Safety pause: ChatGPT DOM structure changed',
             safetyRestored: 'DOM structure check passed; optimizer resumed',
@@ -104,7 +122,9 @@
             domWaiting: 'DOM bekleniyor',
             turnsMissing: 'Sohbet turnleri bulunamadı',
             stats: (all, visible, hidden) => `Turn ${all} | görünür ${visible} | gizli ${hidden}`,
+            nativeStats: (rendered) => `Yerel sanallaştırma | render ${rendered}`,
             reasoningStats: (handled, open) => `Reasoning işlendi ${handled} | açık ${open}`,
+            nativeActive: 'ChatGPT yerel DOM sanallaştırması aktif',
             optimize: 'Optimize et',
             domOnly: 'Sadece DOM',
             older: (n) => `+${n} eski`,
@@ -121,7 +141,9 @@
             shortcutTitle: 'Tam Optimize için Alt+Shift+O kısayolunu etkinleştir',
             resetReasoning: 'Reasoning geçmişini sıfırla',
             feedbackOptimize: (hidden, collapsed) => `Optimize edildi: ${hidden} eski turn gizlendi · ${collapsed} reasoning kapatıldı`,
+            feedbackOptimizeNative: (collapsed) => `Yerel sanallaştırma aktif · ${collapsed} reasoning kapatıldı`,
             feedbackDomOnly: (hidden) => `DOM optimize edildi: ${hidden} eski turn gizlendi`,
+            feedbackNative: 'Uzun sohbet DOM’unu artık ChatGPT yerel sanallaştırmayla yönetiyor',
             feedbackReset: (count) => `Reasoning geçmişi sıfırlandı: ${count} kayıt temizlendi`,
             safetyPaused: 'Güvenlik duraklatması: ChatGPT DOM yapısı değişti',
             safetyRestored: 'DOM yapısı kontrol edildi; optimizer devam ediyor',
@@ -147,6 +169,8 @@
         handledReasoning: loadHandledReasoning(),
         routeKey: currentRouteKey(),
         root: null,
+        thread: null,
+        domMode: null,
         scroller: null,
         observer: null,
         panelHost: null,
@@ -286,17 +310,13 @@
         }
     }
 
-    function getReasoningKey(wrapper, summary) {
+    function getReasoningKey(wrapper, index) {
         const turnId =
+            wrapper.getAttribute('data-turn-key') ||
             wrapper.getAttribute('data-turn-id-container') ||
             wrapper.getAttribute('data-turn-id');
 
-        if (!turnId) return null;
-
-        const summaries = Array.from(wrapper.querySelectorAll('span.block'));
-        const index = summaries.indexOf(summary);
-
-        if (index < 0) return null;
+        if (!turnId || index < 0) return null;
 
         return `${location.pathname}:${turnId}:${index}`;
     }
@@ -363,29 +383,44 @@
     function runDomSelfCheck(force = false) {
         if (state.destroyed) return false;
 
-        const thread = document.querySelector(SELECTORS.thread);
-        if (!thread) {
-            if (force) showFeedback(t.noConversation);
-            return false;
-        }
-
         if (!state.root?.isConnected) {
             if (force) showFeedback(t.noConversation);
             return false;
         }
 
-        const discoveredWrappers = Array.from(
-            thread.querySelectorAll(SELECTORS.wrapper)
-        ).filter((el) =>
-            el instanceof HTMLElement &&
-            el.dataset.turnIdContainer !== 'client-created-root'
-        );
+        let contractOk = false;
 
-        const directWrappers = getWrappers();
-        const rootIsInsideThread = thread.contains(state.root);
-        const contractOk =
-            rootIsInsideThread &&
-            (discoveredWrappers.length === 0 || directWrappers.length > 0);
+        if (state.domMode === DOM_MODE.native) {
+            const conversation = document.querySelector(SELECTORS.modernConversation);
+            const wrappers = getWrappers();
+
+            contractOk = Boolean(
+                conversation &&
+                conversation.contains(state.root) &&
+                wrappers.length > 0 &&
+                wrappers.every((el) =>
+                    el instanceof HTMLElement &&
+                    el.matches(SELECTORS.modernTurn) &&
+                    Boolean(el.getAttribute('data-turn-key'))
+                )
+            );
+        } else if (state.domMode === DOM_MODE.legacy) {
+            const thread = document.querySelector(SELECTORS.legacyThread);
+
+            if (thread) {
+                const discoveredWrappers = Array.from(
+                    thread.querySelectorAll(SELECTORS.legacyWrapper)
+                ).filter((el) =>
+                    el instanceof HTMLElement &&
+                    el.dataset.turnIdContainer !== 'client-created-root'
+                );
+
+                const directWrappers = getWrappers();
+                contractOk =
+                    thread.contains(state.root) &&
+                    (discoveredWrappers.length === 0 || directWrappers.length > 0);
+            }
+        }
 
         if (contractOk) {
             state.domMismatchCount = 0;
@@ -426,7 +461,7 @@
         style.id = `${APP}-style`;
         style.textContent = `
             [${HIDDEN_ATTR}="1"] { display: none !important; }
-            #thread[${CV_ATTR}="1"] ${SELECTORS.turn} {
+            ${SELECTORS.legacyThread}[${CV_ATTR}="1"] ${SELECTORS.legacyTurn} {
                 content-visibility: auto !important;
                 contain-intrinsic-size: auto 240px !important;
             }
@@ -453,6 +488,8 @@
         if (state.root !== discovered.root) {
             resetObserver();
             state.root = discovered.root;
+            state.thread = discovered.thread;
+            state.domMode = discovered.mode;
             state.scroller = discoverScroller(state.root);
             observeRoot(state.root);
         }
@@ -470,10 +507,24 @@
     }
 
     function discoverConversationRoot() {
-        const thread = document.querySelector(SELECTORS.thread);
+        const modernConversation = document.querySelector(SELECTORS.modernConversation);
+        if (modernConversation) {
+            const turns = modernConversation.querySelectorAll(SELECTORS.modernTurn);
+            if (turns.length) {
+                return {
+                    thread: modernConversation,
+                    root: modernConversation,
+                    mode: DOM_MODE.native,
+                };
+            }
+        }
+
+        const thread = document.querySelector(SELECTORS.legacyThread);
         if (!thread) return null;
 
-        const candidates = Array.from(thread.querySelectorAll(SELECTORS.wrapper));
+        const candidates = Array.from(
+            thread.querySelectorAll(SELECTORS.legacyWrapper)
+        );
         if (!candidates.length) return null;
 
         const parentCounts = new Map();
@@ -492,20 +543,32 @@
             }
         }
 
-        return root ? { thread, root } : null;
+        return root ? { thread, root, mode: DOM_MODE.legacy } : null;
     }
 
     function getWrappers() {
         if (!state.root?.isConnected) return [];
 
+        if (state.domMode === DOM_MODE.native) {
+            return Array.from(
+                state.root.querySelectorAll(SELECTORS.modernTurn)
+            ).filter((el) =>
+                el instanceof HTMLElement &&
+                Boolean(el.getAttribute('data-turn-key'))
+            );
+        }
+
         return Array.from(state.root.children).filter((el) =>
             el instanceof HTMLElement &&
-            el.matches(SELECTORS.wrapper) &&
+            el.matches(SELECTORS.legacyWrapper) &&
             el.dataset.turnIdContainer !== 'client-created-root'
         );
     }
 
     function discoverScroller(start) {
+        const modernScroller = start?.closest?.(SELECTORS.modernScroller);
+        if (modernScroller instanceof HTMLElement) return modernScroller;
+
         for (let el = start; el && el !== document.body; el = el.parentElement) {
             const overflowY = getComputedStyle(el).overflowY;
             const canScroll = overflowY === 'auto' || overflowY === 'scroll';
@@ -529,6 +592,8 @@
         state.observer?.disconnect();
         state.observer = null;
         state.root = null;
+        state.thread = null;
+        state.domMode = null;
         state.scroller = null;
     }
 
@@ -556,7 +621,11 @@
 
         window.setTimeout(() => {
             const stats = collectStats();
-            showFeedback(t.feedbackOptimize(stats.hiddenWrappers, collapsed));
+            showFeedback(
+                stats.nativeVirtualization
+                    ? t.feedbackOptimizeNative(collapsed)
+                    : t.feedbackOptimize(stats.hiddenWrappers, collapsed)
+            );
         }, 180);
     }
 
@@ -576,7 +645,11 @@
 
         window.setTimeout(() => {
             const stats = collectStats();
-            showFeedback(t.feedbackDomOnly(stats.hiddenWrappers));
+            showFeedback(
+                stats.nativeVirtualization
+                    ? t.feedbackNative
+                    : t.feedbackDomOnly(stats.hiddenWrappers)
+            );
         }, 180);
     }
 
@@ -612,6 +685,17 @@
 
         const wrappers = getWrappers();
         if (!wrappers.length) {
+            updatePanel();
+            return;
+        }
+
+        if (state.domMode === DOM_MODE.native) {
+            for (const wrapper of wrappers) {
+                wrapper.removeAttribute(HIDDEN_ATTR);
+            }
+            state.revealedExtra = 0;
+            applyContentVisibilityFlag();
+            setStatus(t.nativeActive);
             updatePanel();
             return;
         }
@@ -678,6 +762,12 @@
     function revealOlder(count) {
         if (!state.root?.isConnected) return;
 
+        if (state.domMode === DOM_MODE.native) {
+            setStatus(t.nativeActive);
+            updatePanel();
+            return;
+        }
+
         const wrappers = getWrappers();
         const hidden = wrappers.filter(
             (wrapper) => wrapper.getAttribute(HIDDEN_ATTR) === '1'
@@ -742,7 +832,16 @@
     }
 
     function applyContentVisibilityFlag() {
-        const thread = document.querySelector(SELECTORS.thread);
+        if (state.domMode === DOM_MODE.native) {
+            state.root?.removeAttribute(CV_ATTR);
+            return;
+        }
+
+        const thread =
+            state.thread?.isConnected
+                ? state.thread
+                : document.querySelector(SELECTORS.legacyThread);
+
         if (!thread) return;
 
         if (state.config.contentVisibility) {
@@ -771,16 +870,11 @@
         let handledChanged = false;
 
         for (const wrapper of targets) {
-            const summaries = wrapper.querySelectorAll('span.block');
+            const disclosures = getAnalysisDisclosures(wrapper);
 
-            for (const summary of summaries) {
-                if (!(summary instanceof HTMLElement)) continue;
-                if (summary.closest('[class*="group/tool-message"]')) continue;
-
-                const disclosure = getAnalysisDisclosure(summary);
-                if (!disclosure) continue;
-
-                const key = getReasoningKey(wrapper, summary);
+            for (let index = 0; index < disclosures.length; index += 1) {
+                const disclosure = disclosures[index];
+                const key = getReasoningKey(wrapper, index);
                 if (!key) continue;
 
                 if (!force && state.handledReasoning.has(key)) continue;
@@ -808,14 +902,70 @@
         return collapsed;
     }
 
-    function getAnalysisDisclosure(summary) {
+    function getAnalysisDisclosures(wrapper) {
+        if (wrapper.matches(SELECTORS.modernTurn)) {
+            return Array.from(
+                wrapper.querySelectorAll('button[aria-expanded][aria-labelledby]')
+            )
+                .map((button) => getModernAnalysisDisclosure(button))
+                .filter(Boolean);
+        }
+
+        const disclosures = [];
+
+        for (const summary of wrapper.querySelectorAll('span.block')) {
+            if (!(summary instanceof HTMLElement)) continue;
+            if (summary.closest('[class*="group/tool-message"]')) continue;
+
+            const disclosure = getLegacyAnalysisDisclosure(summary);
+            if (disclosure) disclosures.push(disclosure);
+        }
+
+        return disclosures;
+    }
+
+    function getModernAnalysisDisclosure(button) {
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
+
+        const expanded = button.getAttribute('aria-expanded');
+        if (expanded !== 'true' && expanded !== 'false') return null;
+
+        const header = button.parentElement;
+        const container = header?.parentElement;
+        if (!(header instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+            return null;
+        }
+
+        if (header.firstElementChild !== button) return null;
+        if (button.closest('[data-chatgpt-composer]')) return null;
+
+        const labelId = button.getAttribute('aria-labelledby');
+        const label = labelId ? document.getElementById(labelId) : null;
+        if (!(label instanceof HTMLElement) || label.parentElement !== header) {
+            return null;
+        }
+
+        if (expanded === 'true') {
+            const content = header.nextElementSibling;
+            if (
+                !(content instanceof HTMLElement) ||
+                content.parentElement !== container
+            ) {
+                return null;
+            }
+        }
+
+        return { button, open: expanded === 'true' };
+    }
+
+    function getLegacyAnalysisDisclosure(summary) {
         const button = summary.querySelector('button');
         if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
 
         const content = summary.nextElementSibling;
         if (!(content instanceof HTMLElement)) return null;
 
-        if (isOpenAnalysisContent(content)) {
+        if (isOpenLegacyAnalysisContent(content)) {
             return { button, open: true };
         }
 
@@ -832,12 +982,8 @@
         let open = 0;
 
         for (const wrapper of getWrappers()) {
-            for (const summary of wrapper.querySelectorAll('span.block')) {
-                if (!(summary instanceof HTMLElement)) continue;
-                if (summary.closest('[class*="group/tool-message"]')) continue;
-
-                const disclosure = getAnalysisDisclosure(summary);
-                if (disclosure?.open) open += 1;
+            for (const disclosure of getAnalysisDisclosures(wrapper)) {
+                if (disclosure.open) open += 1;
             }
         }
 
@@ -855,13 +1001,14 @@
         return count;
     }
 
-    function isOpenAnalysisContent(element) {
+    function isOpenLegacyAnalysisContent(element) {
         if (
             element.tagName !== 'DIV' ||
             element.hasAttribute('data-message-author-role')
         ) {
             return false;
         }
+
         const inlineHeight = element.style.height?.trim().toLowerCase() || '';
         if (inlineHeight !== 'auto') return false;
         if (element.querySelector('[data-message-author-role]')) return false;
@@ -897,17 +1044,24 @@
         const hidden = wrappers.filter(
             (wrapper) => wrapper.getAttribute(HIDDEN_ATTR) === '1'
         ).length;
-        const rendered = wrappers.filter(
-            (wrapper) => wrapper.querySelector(SELECTORS.turn)
-        ).length;
+        const nativeVirtualization = state.domMode === DOM_MODE.native;
+        const rendered = nativeVirtualization
+            ? wrappers.length
+            : wrappers.filter(
+                (wrapper) => wrapper.querySelector(SELECTORS.legacyTurn)
+            ).length;
 
         return Object.freeze({
             route: state.routeKey,
+            domMode: state.domMode,
+            nativeVirtualization,
             wrappers: wrappers.length,
             visibleWrappers: wrappers.length - hidden,
             hiddenWrappers: hidden,
             renderedTurns: rendered,
-            nativeVirtualizedPlaceholders: wrappers.length - rendered,
+            nativeVirtualizedPlaceholders: nativeVirtualization
+                ? null
+                : wrappers.length - rendered,
             keepRecent: state.config.keepRecent,
             revealedExtra: state.revealedExtra,
             autoThreshold: state.config.autoThreshold,
@@ -1249,9 +1403,11 @@
         if (!state.panel) return;
 
         const stats = collectStats();
-        state.panel.stats.textContent = stats.wrappers
-            ? t.stats(stats.wrappers, stats.visibleWrappers, stats.hiddenWrappers)
-            : t.turnsMissing;
+        state.panel.stats.textContent = stats.nativeVirtualization
+            ? t.nativeStats(stats.renderedTurns)
+            : stats.wrappers
+                ? t.stats(stats.wrappers, stats.visibleWrappers, stats.hiddenWrappers)
+                : t.turnsMissing;
         state.panel.reasoningStats.textContent = t.reasoningStats(
             stats.handledReasoning,
             stats.openReasoning
@@ -1261,8 +1417,23 @@
             ? `ChatGPT DOM ${stats.hiddenWrappers}↓`
             : 'ChatGPT DOM';
         state.panel.older.textContent = t.older(state.config.revealStep);
-        state.panel.older.disabled = stats.hiddenWrappers === 0;
-        state.panel.restore.disabled = stats.hiddenWrappers === 0 && !state.paused;
+        state.panel.domOnly.disabled = stats.nativeVirtualization;
+        state.panel.older.disabled =
+            stats.nativeVirtualization || stats.hiddenWrappers === 0;
+        state.panel.restore.disabled =
+            stats.nativeVirtualization ||
+            (stats.hiddenWrappers === 0 && !state.paused);
+
+        for (const control of [
+            state.panel.keep,
+            state.panel.step,
+            state.panel.threshold,
+            state.panel.auto,
+            state.panel.cv,
+        ]) {
+            control.disabled = stats.nativeVirtualization;
+        }
+
         syncPanelInputs();
     }
 

@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.0] - 2026-09-24
+
+### Fixed
+
+- Updated conversation discovery for the redesigned ChatGPT DOM using `data-thread-find-target="conversation"` and `data-turn-key`.
+- Updated reasoning disclosure detection for the current `button[aria-expanded][aria-labelledby]` structure.
+- Updated streaming detection for the current `role="status"[aria-busy="true"]` response marker.
+- Prevented the legacy turn-hiding optimizer from interfering with ChatGPT's new native virtualized conversation window.
+
+### Changed
+
+- Added explicit current-UI and legacy DOM modes with fail-closed self-checks.
+- Native-virtualized mode now leaves ChatGPT's own turn window intact and keeps the script focused on reasoning cleanup.
+- Legacy DOM optimization remains available as a compatibility fallback.
+- Panel statistics now report native virtualization when the redesigned interface is detected.
+
 ## [0.6.0] - 2026-09-22
 
 ### Added

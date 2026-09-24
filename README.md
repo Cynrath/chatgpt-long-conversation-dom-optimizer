@@ -1,18 +1,17 @@
 # ChatGPT Long Conversation DOM Optimizer
 
-[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/blob/main/CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tampermonkey](https://img.shields.io/badge/userscript-Tampermonkey-black.svg)](https://www.tampermonkey.net/)
 
-A lightweight userscript that keeps very long ChatGPT conversations responsive without deleting conversation state from the page. It can hide older turn wrappers from layout/rendering, use native `content-visibility`, and automatically collapse open reasoning/analysis blocks.
+A lightweight userscript for long ChatGPT conversations. On the current ChatGPT interface it cooperates with ChatGPT's native turn virtualization and focuses on safe reasoning/analysis cleanup; on the legacy interface it can still hide older turn wrappers and use `content-visibility`.
 
 [**Install / Update userscript**](https://raw.githubusercontent.com/Cynrath/chatgpt-long-conversation-dom-optimizer/main/chatgpt-long-conversation-dom-optimizer.user.js)
 
 ## Features
 
-- Keeps only the most recent conversation turns visible while preserving the existing DOM.
-- Restores older turns on demand.
-- Uses `content-visibility: auto` for off-screen rendered turns.
+- Detects the current ChatGPT native virtualization contract (`data-thread-find-target="conversation"` + `data-turn-key`) and does not fight ChatGPT's own virtualized turn window.
+- Keeps legacy turn hiding/restoration and `content-visibility` as a compatibility fallback for the previous conversation DOM.
 - Automatically normalizes each reasoning/analysis block only once. If a block is open the first time the script sees it, it is collapsed; if it is already closed, it is simply marked as handled.
 - After a reasoning block has been handled once, opening it manually does not trigger another automatic close. Later reasoning blocks are handled independently.
 - The panel header includes an always-visible **Optimize** shortcut. Manual Optimize performs a one-shot force cleanup: it optimizes the DOM and closes every reasoning block that is currently open, even if that block was already handled.
@@ -21,7 +20,7 @@ A lightweight userscript that keeps very long ChatGPT conversations responsive w
 - Shows hidden-turn, handled-reasoning, and currently-open-reasoning counts in the panel.
 - Includes a **Reset reasoning history** action for clearing the current tab session's handled keys.
 - Supports **Alt+Shift+O** as an optional full-Optimize keyboard shortcut.
-- Avoids automatic reasoning collapse while ChatGPT is actively streaming a response.
+- Avoids automatic reasoning collapse while ChatGPT is actively streaming a response, including the current `role="status"[aria-busy="true"]` marker.
 - Runs a conservative DOM self-check and pauses destructive automation if the expected conversation-root structure changes.
 - Reasoning detection does **not** depend on labels such as `Analiz edildi`, `Reasoned`, or another UI language.
 - Avoids watching streamed token changes with a heavy subtree observer.
@@ -75,7 +74,7 @@ The **DOM only** action applies the long-conversation DOM optimization without c
 
 The panel displays current hidden-turn, handled-reasoning, and open-reasoning counts. Optimize and related manual actions show a short feedback message for about 2.6 seconds.
 
-Reasoning detection does not match translated labels such as `Analiz edildi` or `Reasoned`. It uses structural DOM checks and excludes tool-message containers. If ChatGPT changes the relevant DOM structure, the detector is designed to fail closed instead of clicking unrelated controls.
+Reasoning detection does not match translated labels such as `Analiz edildi` or `Reasoned`. On the current UI it uses the structural disclosure contract `button[aria-expanded][aria-labelledby]` inside a `data-turn-key` turn; the legacy detector remains as a fallback. If ChatGPT changes the relevant DOM structure, the detector is designed to fail closed instead of clicking unrelated controls.
 
 ## Console API
 
@@ -115,7 +114,7 @@ Each published update must increment the userscript `@version` value. Tampermonk
 
 ChatGPT is a frequently changing web application. This userscript deliberately relies on a small set of DOM attributes and structural checks instead of generated/hash class names where practical, but future ChatGPT UI changes can still require selector updates.
 
-The runtime self-check verifies the established conversation root before destructive operations. After repeated structural mismatches, the optimizer enters a runtime safety pause instead of continuing to hide/click DOM elements. A manual Optimize or `selfCheck()` can retry the contract check.
+The runtime self-check verifies either the current native-virtualized conversation contract or the legacy conversation root before destructive operations. In native mode, legacy DOM hiding controls are disabled because ChatGPT already manages rendered turns. After repeated structural mismatches, the optimizer enters a runtime safety pause instead of continuing to click or alter DOM elements.
 
 If something stops working, open a [bug report](https://github.com/Cynrath/chatgpt-long-conversation-dom-optimizer/issues/new/choose) and include the browser, userscript-manager version, script version, and the affected ChatGPT UI behavior.
 
